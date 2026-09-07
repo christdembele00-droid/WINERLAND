@@ -1,0 +1,23 @@
+{
+  "name": "winerland",
+  "version": "1.0.0",
+  "private": true,
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "1.23.1",
+    "@react-three/fiber": "^8.17.12",
+    "expo": "~51.0.39",
+    "expo-gl": "~14.0.2",
+    "expo-status-bar": "~1.12.1",
+    "firebase": "^10.14.1",
+    "react": "18.2.0",
+    "react-native": "0.74.5",
+    "three": "^0.160.1"
+  }
+}
