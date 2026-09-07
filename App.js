@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { Component, useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -6,6 +6,33 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from './src/firebase';
 import GameScreen from './src/screens/GameScreen';
 import { uploadAvatar, uploadGuildImage, uploadEventMedia } from './src/services/winerlandMedia';
+
+class AppErrorBoundary extends Component {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error) {
+    console.error('WINERLAND APP ERROR', error);
+  }
+
+  handleRetry = () => this.setState({ hasError: false });
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <View style={styles.errorScreen}>
+        <Text style={styles.errorTitle}>WINERLAND</Text>
+        <Text style={styles.errorText}>Une erreur a interrompu le module de jeu.</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={this.handleRetry}>
+          <Text style={styles.retryText}>RECHARGER LE MODULE</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+}
 
 function MediaManager() {
   const [visible, setVisible] = useState(false);
@@ -117,11 +144,11 @@ function MediaManager() {
 
 export default function App() {
   return (
-    <>
+    <AppErrorBoundary>
       <StatusBar hidden />
       <GameScreen />
       <MediaManager />
-    </>
+    </AppErrorBoundary>
   );
 }
 
@@ -152,4 +179,9 @@ const styles = StyleSheet.create({
   input: { marginTop: 10, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 9, borderWidth: 1, borderColor: '#1d4f55', backgroundColor: '#06151b', color: '#fff', fontSize: 10 },
   status: { color: '#00e5c0', fontSize: 9, fontWeight: '800', marginTop: 14 },
   urlText: { color: '#7ea3aa', fontSize: 7, marginTop: 10 },
+  errorScreen: { flex: 1, backgroundColor: '#050b10', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  errorTitle: { color: '#00e5c0', fontSize: 28, fontWeight: '900', letterSpacing: 5 },
+  errorText: { color: '#9bb5ba', marginTop: 12, fontSize: 12, textAlign: 'center' },
+  retryButton: { marginTop: 22, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: '#00e5c0', backgroundColor: '#0a1b22' },
+  retryText: { color: '#fff', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
 });
