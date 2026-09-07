@@ -1,15 +1,15 @@
-import { doc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
 import { ref, update } from 'firebase/database';
 import { db, realtimeDb } from '../firebase';
 import { uploadImageToCloudinary, uploadVideoToCloudinary } from './cloudinary';
 
 async function savePlayerMedia(uid, field, media) {
   if (!uid) throw new Error('Utilisateur non connecté');
-  await updateDoc(doc(db, 'players', uid), {
+  await setDoc(doc(db, 'players', uid), {
     [field]: media.url,
     [`${field}PublicId`]: media.publicId || null,
     [`${field}UpdatedAt`]: Date.now(),
-  });
+  }, { merge: true });
   return media;
 }
 
