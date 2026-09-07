@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Winerland",
+    "slug": "winerland",
+    "version": "1.0.0",
+    "orientation": "landscape",
+    "userInterfaceStyle": "dark",
+    "scheme": "winerland",
+    "android": {
+      "package": "com.winerland.game"
+    },
+    "ios": {
+      "bundleIdentifier": "com.winerland.game"
+    }
+  }
+}
