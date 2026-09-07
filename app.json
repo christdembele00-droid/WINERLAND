@@ -12,6 +12,11 @@
     "ios": {
       "bundleIdentifier": "com.winerland.game"
     },
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#071018"
+    },
     "extra": {
       "eas": {
         "projectId": "a1ff9769-3b1d-418a-89e1-a25b3327e51a"
