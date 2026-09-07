@@ -11,6 +11,11 @@
     },
     "ios": {
       "bundleIdentifier": "com.winerland.game"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "a1ff9769-3b1d-418a-89e1-a25b3327e51a"
+      }
     }
   }
 }
