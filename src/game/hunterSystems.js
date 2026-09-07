@@ -1,12 +1,12 @@
 export const GAME_MODES = [
-  { id: 'open-world', name: 'OPEN WORLD', teamSize: 1, pvp: true },
-  { id: 'guild-war', name: 'GUILD WAR', teamSize: 10, pvp: true },
-  { id: 'robot-hunt', name: 'ROBOT HUNT', teamSize: 4, pvp: false },
-  { id: 'world-boss', name: 'WORLD BOSS', teamSize: 8, pvp: false },
-  { id: 'survival', name: 'SURVIVAL', teamSize: 4, pvp: true },
-  { id: 'capture-zone', name: 'CAPTURE ZONE', teamSize: 5, pvp: true },
-  { id: 'raid', name: 'RAID', teamSize: 6, pvp: false },
-  { id: 'ranked', name: 'RANKED', teamSize: 5, pvp: true },
+  { id: 'open-world', name: 'OPEN WORLD', teamSize: 1, pvp: true, roomType: 'persistent' },
+  { id: 'guild-war', name: 'GUILD WAR', teamSize: 10, pvp: true, roomType: 'guild' },
+  { id: 'robot-hunt', name: 'ROBOT HUNT', teamSize: 4, pvp: false, roomType: 'match' },
+  { id: 'world-boss', name: 'WORLD BOSS', teamSize: 8, pvp: false, roomType: 'event' },
+  { id: 'survival', name: 'SURVIVAL', teamSize: 4, pvp: true, roomType: 'match' },
+  { id: 'capture-zone', name: 'CAPTURE ZONE', teamSize: 5, pvp: true, roomType: 'match' },
+  { id: 'raid', name: 'RAID', teamSize: 6, pvp: false, roomType: 'match' },
+  { id: 'ranked', name: 'RANKED', teamSize: 5, pvp: true, roomType: 'ranked' },
 ];
 
 export const ROBOT_ARCHETYPES = [
@@ -33,6 +33,8 @@ export function createHunterProgress() {
     missionsCompleted: 0,
     robotsDestroyed: 0,
     guildWarsWon: 0,
+    matchesPlayed: 0,
+    matchesWon: 0,
   };
 }
 
@@ -45,9 +47,28 @@ export function addXp(progress, amount) {
   return next;
 }
 
+export function getMode(modeId) {
+  return GAME_MODES.find((item) => item.id === modeId) || GAME_MODES[0];
+}
+
+export function getRoomId(modeId, matchId = 'main') {
+  const mode = getMode(modeId);
+  return `winerland_${mode.roomType}_${mode.id}_${matchId}`;
+}
+
 export function findMatch({ modeId, players = [], maxPlayers = 10 }) {
-  const mode = GAME_MODES.find((item) => item.id === modeId) || GAME_MODES[0];
-  const available = players.filter((player) => player.mode === mode.id);
-  if (available.length >= Math.min(mode.teamSize, maxPlayers)) return available.slice(0, maxPlayers);
-  return available;
+  const mode = getMode(modeId);
+  const available = players.filter((player) => player.mode === mode.id && player.connected !== false);
+  return available.slice(0, Math.min(maxPlayers, mode.teamSize));
+}
+
+export function getMatchState({ modeId, players = [] }) {
+  const mode = getMode(modeId);
+  const members = findMatch({ modeId, players, maxPlayers: mode.teamSize });
+  return {
+    modeId: mode.id,
+    requiredPlayers: mode.teamSize,
+    players: members,
+    ready: mode.teamSize <= 1 || members.length >= mode.teamSize,
+  };
 }
