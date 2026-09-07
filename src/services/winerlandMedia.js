@@ -29,8 +29,10 @@ export async function uploadGuildImage(guildId, fileUri) {
   return media;
 }
 
-export async function uploadEventMedia(eventId, fileUri, resourceType = 'image') {
+export async function uploadEventMedia(eventId, fileUri, resourceType = 'image', uid) {
   if (!eventId) throw new Error('Événement manquant');
+  if (!uid) throw new Error('Utilisateur non connecté');
+
   const folder = `winerland/events/${eventId}`;
   const media = resourceType === 'video'
     ? await uploadVideoToCloudinary(fileUri, folder)
@@ -38,6 +40,7 @@ export async function uploadEventMedia(eventId, fileUri, resourceType = 'image')
 
   await setDoc(doc(db, 'eventMedia', eventId), {
     eventId,
+    createdBy: uid,
     url: media.url,
     publicId: media.publicId || null,
     resourceType: media.resourceType || resourceType,
