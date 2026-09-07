@@ -2,17 +2,22 @@ import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Canvas, useFrame } from '@react-three/fiber/native';
 import * as THREE from 'three';
+import { onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import { onDisconnect, onValue, ref, remove, set, update } from 'firebase/database';
+import { auth, realtimeDb } from '../firebase';
 
-function Player({ position }) {
+const ROOM_ID = 'quickmatch';
+
+function Player({ position, remote = false }) {
   const group = useRef();
   useFrame((_, delta) => {
-    if (group.current) group.current.rotation.y += delta * 0.3;
+    if (group.current && remote) group.current.rotation.y += delta * 0.3;
   });
   return (
     <group ref={group} position={position}>
       <mesh position={[0, 1, 0]} castShadow>
         <boxGeometry args={[0.8, 1.8, 0.8]} />
-        <meshStandardMaterial color="#00d9b5" />
+        <meshStandardMaterial color={remote ? '#ff9f1c' : '#00d9b5'} />
       </mesh>
       <mesh position={[0, 2.15, 0]} castShadow>
         <sphereGeometry args={[0.42, 20, 20]} />
@@ -63,6 +68,75 @@ export default function GameScreen() {
   const [position, setPosition] = useState([0, 0, 6]);
   const [score, setScore] = useState(0);
   const [hp, setHp] = useState(100);
+  const [remotePlayers, setRemotePlayers] = useState([]);
+  const [connectionStatus, setConnectionStatus] = useState('Connexion...');
+  const [uid, setUid] = useState(null);
+
+  useEffect(() => {
+    let unsubscribeAuth;
+    let unsubscribeRoom;
+    let mounted = true;
+
+    const startRealtime = async (user) => {
+      if (!mounted || !user) return;
+      setUid(user.uid);
+      const playerRef = ref(realtimeDb, `rooms/${ROOM_ID}/players/${user.uid}`);
+      const playersRef = ref(realtimeDb, `rooms/${ROOM_ID}/players`);
+
+      try {
+        await onDisconnect(playerRef).remove();
+        await set(playerRef, {
+          x: 0,
+          y: 0,
+          z: 6,
+          rotation: 0,
+          health: 100,
+          score: 0,
+          joinedAt: Date.now(),
+        });
+        setConnectionStatus('En ligne');
+
+        unsubscribeRoom = onValue(playersRef, (snapshot) => {
+          const data = snapshot.val() || {};
+          const others = Object.entries(data)
+            .filter(([id]) => id !== user.uid)
+            .map(([id, player]) => ({
+              id,
+              position: [player.x || 0, player.y || 0, player.z || 0],
+            }));
+          setRemotePlayers(others);
+        }, () => setConnectionStatus('Erreur réseau'));
+      } catch {
+        setConnectionStatus('Erreur Firebase');
+      }
+    };
+
+    unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (user) startRealtime(user);
+      else signInAnonymously(auth).catch(() => setConnectionStatus('Connexion impossible'));
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribeAuth?.();
+      unsubscribeRoom?.();
+      if (auth.currentUser) {
+        remove(ref(realtimeDb, `rooms/${ROOM_ID}/players/${auth.currentUser.uid}`)).catch(() => {});
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!uid) return;
+    update(ref(realtimeDb, `rooms/${ROOM_ID}/players/${uid}`), {
+      x: position[0],
+      y: position[1],
+      z: position[2],
+      health: hp,
+      score,
+      updatedAt: Date.now(),
+    }).catch(() => setConnectionStatus('Erreur réseau'));
+  }, [position, hp, score, uid]);
 
   const move = (dx, dz) => {
     setPosition(([x, y, z]) => [
@@ -74,13 +148,6 @@ export default function GameScreen() {
 
   const shoot = () => setScore((value) => value + 10);
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setHp((value) => (value <= 0 ? 100 : value));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
   return (
     <View style={styles.container}>
       <Canvas shadows camera={{ position: [0, 7, 15], fov: 55 }}>
@@ -89,12 +156,18 @@ export default function GameScreen() {
         <directionalLight position={[8, 14, 8]} intensity={2} castShadow />
         <Arena />
         <Player position={position} />
+        {remotePlayers.map((player) => (
+          <Player key={player.id} position={player.position} remote />
+        ))}
         <CameraFollow position={position} />
       </Canvas>
 
       <View style={styles.hud} pointerEvents="box-none">
         <View style={styles.topBar}>
-          <Text style={styles.title}>WINERLAND</Text>
+          <View>
+            <Text style={styles.title}>WINERLAND</Text>
+            <Text style={styles.connection}>{connectionStatus} • {remotePlayers.length + 1} joueur(s)</Text>
+          </View>
           <View style={styles.stats}>
             <Text style={styles.text}>SCORE : {score}</Text>
             <Text style={styles.hp}>HP : {hp}</Text>
@@ -124,6 +197,7 @@ const styles = StyleSheet.create({
   hud: { ...StyleSheet.absoluteFillObject, justifyContent: 'space-between', padding: 18 },
   topBar: { marginTop: 24, flexDirection: 'row', justifyContent: 'space-between' },
   title: { color: '#fff', fontSize: 25, fontWeight: '900', letterSpacing: 3 },
+  connection: { color: '#a9bac5', fontSize: 11, marginTop: 3, fontWeight: '700' },
   stats: { alignItems: 'flex-end' },
   text: { color: '#fff', fontSize: 16, fontWeight: '800' },
   hp: { color: '#00ffcc', fontSize: 16, fontWeight: '800' },
