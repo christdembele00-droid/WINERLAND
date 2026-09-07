@@ -18,12 +18,13 @@ function MediaManager() {
 
   useEffect(() => onAuthStateChanged(auth, (user) => setUid(user?.uid || null)), []);
 
-  const pick = async (mediaTypes) => {
+  const pick = async (mediaTypes, allowsEditing = false) => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) throw new Error('Permission galerie refusée');
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes,
-      allowsEditing: mediaTypes === ['images'],
+      allowsEditing,
+      aspect: allowsEditing ? [1, 1] : undefined,
       quality: 0.85,
     });
     if (result.canceled || !result.assets?.[0]?.uri) return null;
@@ -51,13 +52,13 @@ function MediaManager() {
 
   const handleAvatar = () => run('AVATAR', async () => {
     if (!uid) throw new Error('Connexion Firebase en cours');
-    const asset = await pick(['images']);
+    const asset = await pick(['images'], true);
     return asset ? uploadAvatar(uid, asset.uri) : null;
   });
 
   const handleGuild = () => run('GUILDE', async () => {
     if (!guildId.trim()) throw new Error('ID de guilde requis');
-    const asset = await pick(['images']);
+    const asset = await pick(['images'], true);
     return asset ? uploadGuildImage(guildId.trim(), asset.uri) : null;
   });
 
@@ -139,7 +140,7 @@ const styles = StyleSheet.create({
   },
   mediaLauncherText: { color: '#fff', fontSize: 8, fontWeight: '900', letterSpacing: 1 },
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,.72)', justifyContent: 'center', alignItems: 'center', padding: 18 },
-  panel: { width: 'min(520px, 92%)', maxWidth: 520, borderRadius: 16, padding: 18, backgroundColor: '#071018', borderWidth: 1, borderColor: '#24515a' },
+  panel: { width: '92%', maxWidth: 520, borderRadius: 16, padding: 18, backgroundColor: '#071018', borderWidth: 1, borderColor: '#24515a' },
   panelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
   title: { color: '#fff', fontSize: 18, fontWeight: '900', letterSpacing: 2 },
   subtitle: { color: '#00e5c0', fontSize: 8, fontWeight: '800', marginTop: 4, letterSpacing: 1 },
