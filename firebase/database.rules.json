@@ -9,6 +9,23 @@
           }
         }
       }
+    },
+    "guilds": {
+      "$guildId": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.child('leaderId').val() === auth.uid) || (data.exists() && data.child('leaderId').val() === auth.uid))",
+        "members": {
+          "$uid": {
+            ".write": "auth != null && ((data.exists() && data.child('role').val() === 'leader' && root.child('guilds').child($guildId).child('leaderId').val() === auth.uid) || (!data.exists() && root.child('guilds').child($guildId).child('leaderId').val() === auth.uid))"
+          }
+        }
+      }
+    },
+    "guildWars": {
+      "$warId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
     }
   }
 }
