@@ -1,18 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { StyleSheet, Text, TouchableOpacity, View, ScrollView, Modal } from 'react-native';
 import { Canvas, useFrame } from '@react-three/fiber/native';
 import * as THREE from 'three';
 import { onAuthStateChanged, signInAnonymously } from 'firebase/auth';
 import { onDisconnect, onValue, ref, remove, set, update } from 'firebase/database';
 import { auth, realtimeDb } from '../firebase';
+import { WORLD_ZONES, WORLD_EVENTS, getWorldEvent, clampWorldPosition } from '../game/worldSystem';
+import { GAME_MODES, ROBOT_ARCHETYPES, MISSIONS, createHunterProgress, addXp, findMatch } from '../game/hunterSystems';
+import { createGuild, subscribeGuild } from '../game/guildSystem';
+import { HIGH_FIDELITY } from '../game/highFidelity';
 
 const ROOM_ID = 'quickmatch';
 const MATCH_SECONDS = 8 * 60;
-const MODES = [
-  { id: 'arena', label: 'ARENA', sub: 'Combat classique', icon: '⚔' },
-  { id: 'rush', label: 'RUSH', sub: 'Vitesse maximale', icon: '⚡' },
-  { id: 'survival', label: 'SURVIE', sub: 'Dernier debout', icon: '◆' },
-];
 const WEAPONS = [
   { id: 'pulse', label: 'PULSE', damage: 10, ammo: 30, icon: '◈' },
   { id: 'nova', label: 'NOVA', damage: 18, ammo: 18, icon: '✦' },
@@ -23,26 +22,26 @@ function Player({ position, remote = false, shield = false }) {
   const group = useRef();
   useFrame((state, delta) => {
     if (!group.current) return;
-    group.current.rotation.y += remote ? delta * 0.35 : delta * 0.08;
+    group.current.rotation.y += delta * (remote ? 0.35 : 0.08);
     if (shield) group.current.scale.setScalar(1 + Math.sin(state.clock.elapsedTime * 6) * 0.025);
   });
   return (
     <group ref={group} position={position}>
       <mesh position={[0, 1, 0]} castShadow>
         <boxGeometry args={[0.9, 1.8, 0.75]} />
-        <meshStandardMaterial color={remote ? '#ff8a2a' : '#00e5c0'} metalness={0.35} roughness={0.42} />
+        <meshStandardMaterial color={remote ? '#ff7a2f' : '#00e5c0'} metalness={0.65} roughness={0.25} emissive={remote ? '#3b1305' : '#003d35'} />
       </mesh>
       <mesh position={[0, 2.15, 0]} castShadow>
-        <sphereGeometry args={[0.42, 20, 20]} />
-        <meshStandardMaterial color="#d9a47f" metalness={0.05} roughness={0.65} />
+        <sphereGeometry args={[0.42, 24, 24]} />
+        <meshStandardMaterial color="#d9a47f" roughness={0.62} />
       </mesh>
       <mesh position={[0.64, 1.05, 0]} rotation={[0, 0, -Math.PI / 2]} castShadow>
-        <cylinderGeometry args={[0.12, 0.12, 1.25, 14]} />
-        <meshStandardMaterial color="#17212a" metalness={0.8} roughness={0.2} />
+        <cylinderGeometry args={[0.12, 0.12, 1.25, 16]} />
+        <meshStandardMaterial color="#17212a" metalness={0.9} roughness={0.16} />
       </mesh>
       {shield && (
         <mesh position={[0, 1.15, 0]}>
-          <sphereGeometry args={[1.25, 24, 16]} />
+          <sphereGeometry args={[1.25, 28, 20]} />
           <meshStandardMaterial color="#00e5c0" transparent opacity={0.12} wireframe />
         </mesh>
       )}
@@ -50,48 +49,60 @@ function Player({ position, remote = false, shield = false }) {
   );
 }
 
-function Arena() {
-  const pillars = [
-    [6, 1, 6], [-6, 1, -6], [6, 1, -6], [-6, 1, 6],
-  ];
+function Robot({ robot, destroyed }) {
+  const group = useRef();
+  useFrame((state, delta) => {
+    if (!group.current || destroyed) return;
+    group.current.rotation.y += delta * (1 + robot.speed * 0.12);
+    group.current.position.y = robot.position[1] + Math.sin(state.clock.elapsedTime * 2 + robot.id) * 0.08;
+  });
+  if (destroyed) return null;
+  const scale = robot.archetype === 'boss' ? 1.7 : robot.archetype === 'guardian' ? 1.25 : 0.85;
+  return (
+    <group ref={group} position={robot.position} scale={scale}>
+      <mesh castShadow>
+        <boxGeometry args={[0.9, 1.5, 0.8]} />
+        <meshStandardMaterial color="#7c5cff" metalness={0.85} roughness={0.2} emissive="#1b0f42" />
+      </mesh>
+      <mesh position={[0, 0.95, 0]}>
+        <sphereGeometry args={[0.28, 16, 16]} />
+        <meshStandardMaterial color="#ff7a2f" emissive="#7a2208" emissiveIntensity={1.8} />
+      </mesh>
+      <mesh position={[0, 0.05, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.58, 0.045, 8, 24]} />
+        <meshBasicMaterial color="#00e5c0" />
+      </mesh>
+    </group>
+  );
+}
+
+function World({ robots, position, remotePlayers, shield }) {
+  const pillars = [[7, 1, 7], [-7, 1, -7], [7, 1, -7], [-7, 1, 7]];
   return (
     <group>
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-        <planeGeometry args={[34, 34]} />
-        <meshStandardMaterial color="#0b1821" metalness={0.18} roughness={0.72} />
+        <planeGeometry args={[70, 70]} />
+        <meshStandardMaterial color="#07131b" metalness={0.55} roughness={0.42} />
       </mesh>
-      <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[10, 10.08, 64]} />
-        <meshBasicMaterial color="#00e5c0" transparent opacity={0.7} />
+      <gridHelper args={[70, 35, '#17434a', '#0c252d']} position={[0, 0.02, 0]} />
+      <mesh position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[12, 12.08, 96]} />
+        <meshBasicMaterial color="#00e5c0" transparent opacity={0.85} />
       </mesh>
       {pillars.map((p, i) => (
         <group key={i} position={p}>
-          <mesh castShadow>
-            <cylinderGeometry args={[0.65, 0.85, 2.4, 8]} />
-            <meshStandardMaterial color={i % 2 ? '#263f91' : '#71344c'} metalness={0.5} roughness={0.3} />
-          </mesh>
-          <mesh position={[0, 1.35, 0]}>
-            <torusGeometry args={[0.82, 0.07, 8, 32]} />
-            <meshBasicMaterial color="#00e5c0" />
-          </mesh>
+          <mesh castShadow><cylinderGeometry args={[0.72, 0.92, 3, 10]} /><meshStandardMaterial color={i % 2 ? '#263f91' : '#4d245f'} metalness={0.7} roughness={0.2} /></mesh>
+          <mesh position={[0, 1.65, 0]}><torusGeometry args={[0.92, 0.065, 8, 32]} /><meshBasicMaterial color="#00e5c0" /></mesh>
+          <pointLight position={[0, 1.7, 0]} intensity={2.2} distance={7} color={i % 2 ? '#7c5cff' : '#00e5c0'} />
         </group>
       ))}
-      <mesh position={[0, 1, -4]} castShadow>
-        <boxGeometry args={[6, 2, 0.8]} />
-        <meshStandardMaterial color="#21313b" metalness={0.55} roughness={0.35} />
-      </mesh>
-      <mesh position={[0, 1, 4]} castShadow>
-        <boxGeometry args={[6, 2, 0.8]} />
-        <meshStandardMaterial color="#21313b" metalness={0.55} roughness={0.35} />
-      </mesh>
-      <mesh position={[-4, 1, 0]} castShadow>
-        <boxGeometry args={[0.8, 2, 5]} />
-        <meshStandardMaterial color="#182b35" metalness={0.55} roughness={0.35} />
-      </mesh>
-      <mesh position={[4, 1, 0]} castShadow>
-        <boxGeometry args={[0.8, 2, 5]} />
-        <meshStandardMaterial color="#182b35" metalness={0.55} roughness={0.35} />
-      </mesh>
+      <mesh position={[0, 1.1, -6]} castShadow><boxGeometry args={[9, 2.2, 0.8]} /><meshStandardMaterial color="#172831" metalness={0.82} roughness={0.22} /></mesh>
+      <mesh position={[0, 1.1, 6]} castShadow><boxGeometry args={[9, 2.2, 0.8]} /><meshStandardMaterial color="#172831" metalness={0.82} roughness={0.22} /></mesh>
+      <mesh position={[-6, 1.1, 0]} castShadow><boxGeometry args={[0.8, 2.2, 9]} /><meshStandardMaterial color="#13242c" metalness={0.82} roughness={0.22} /></mesh>
+      <mesh position={[6, 1.1, 0]} castShadow><boxGeometry args={[0.8, 2.2, 9]} /><meshStandardMaterial color="#13242c" metalness={0.82} roughness={0.22} /></mesh>
+      {robots.map((robot) => <Robot key={robot.id} robot={robot} destroyed={robot.destroyed} />)}
+      <Player position={position} shield={shield} />
+      {remotePlayers.map((player) => <Player key={player.id} position={player.position} remote />)}
     </group>
   );
 }
@@ -99,38 +110,32 @@ function Arena() {
 function CameraFollow({ position }) {
   useFrame(({ camera }, delta) => {
     const target = new THREE.Vector3(position[0], 0.9, position[2]);
-    const desired = new THREE.Vector3(position[0], 7.5, position[2] + 10.5);
+    const desired = new THREE.Vector3(position[0], 8.2, position[2] + 11.5);
     camera.position.lerp(desired, Math.min(1, delta * 5));
     camera.lookAt(target);
   });
   return null;
 }
 
-function MiniMap({ position, remotePlayers }) {
-  const size = 116;
-  const scale = 3.1;
+function MiniMap({ position, remotePlayers, robots }) {
+  const size = 118;
+  const scale = 3.2;
   return (
     <View style={styles.map}>
       <Text style={styles.mapTitle}>TACTICAL MAP</Text>
       <View style={styles.mapField}>
         <View style={[styles.mapGrid, { left: 0, right: 0, top: '50%', height: 1 }]} />
         <View style={[styles.mapGrid, { top: 0, bottom: 0, left: '50%', width: 1 }]} />
-        {remotePlayers.map((p) => (
-          <View
-            key={p.id}
-            style={[styles.enemyDot, {
-              left: size / 2 + p.position[0] * scale - 4,
-              top: size / 2 + p.position[2] * scale - 4,
-            }]}
-          />
-        ))}
-        <View style={[styles.playerDot, {
-          left: size / 2 + position[0] * scale - 5,
-          top: size / 2 + position[2] * scale - 5,
-        }]} />
+        {robots.filter((r) => !r.destroyed).map((r) => <View key={`r${r.id}`} style={[styles.robotDot, { left: size / 2 + r.position[0] * scale - 3, top: size / 2 + r.position[2] * scale - 3 }]} />)}
+        {remotePlayers.map((p) => <View key={p.id} style={[styles.enemyDot, { left: size / 2 + p.position[0] * scale - 4, top: size / 2 + p.position[2] * scale - 4 }]} />)}
+        <View style={[styles.playerDot, { left: size / 2 + position[0] * scale - 5, top: size / 2 + position[2] * scale - 5 }]} />
       </View>
     </View>
   );
+}
+
+function PanelButton({ title, sub, active, onPress }) {
+  return <TouchableOpacity style={[styles.panelButton, active && styles.panelButtonActive]} onPress={onPress} activeOpacity={0.82}><Text style={styles.panelButtonTitle}>{title}</Text>{sub ? <Text style={styles.panelButtonSub}>{sub}</Text> : null}</TouchableOpacity>;
 }
 
 export default function GameScreen() {
@@ -138,23 +143,31 @@ export default function GameScreen() {
   const [score, setScore] = useState(0);
   const [hp, setHp] = useState(100);
   const [remotePlayers, setRemotePlayers] = useState([]);
-  const [connectionStatus, setConnectionStatus] = useState('Connexion...');
+  const [connectionStatus, setConnectionStatus] = useState('CONNEXION...');
   const [uid, setUid] = useState(null);
-  const [mode, setMode] = useState('arena');
+  const [mode, setMode] = useState('open-world');
   const [weapon, setWeapon] = useState('pulse');
   const [ammo, setAmmo] = useState(30);
   const [shield, setShield] = useState(false);
   const [panel, setPanel] = useState(null);
   const [matchTime, setMatchTime] = useState(MATCH_SECONDS);
+  const [zoneId, setZoneId] = useState('central');
+  const [progress, setProgress] = useState(createHunterProgress());
+  const [guild, setGuild] = useState(null);
+  const [guildName, setGuildName] = useState('WINERLAND ELITE');
+  const [robots, setRobots] = useState(() => ROBOT_ARCHETYPES.slice(0, 3).map((a, i) => ({ ...a, id: i + 1, archetype: a.id, position: [i * 3 - 3, 0.8, i % 2 ? -3 : 1], destroyed: false })));
+  const [event, setEvent] = useState(getWorldEvent());
+  const [notice, setNotice] = useState('SYSTÈMES WINERLAND INITIALISÉS');
 
   const currentWeapon = WEAPONS.find((item) => item.id === weapon) || WEAPONS[0];
-  const currentMode = MODES.find((item) => item.id === mode) || MODES[0];
+  const currentMode = GAME_MODES.find((item) => item.id === mode) || GAME_MODES[0];
+  const currentZone = WORLD_ZONES.find((item) => item.id === zoneId) || WORLD_ZONES[0];
+  const livePlayers = useMemo(() => [{ id: uid, mode }].filter((p) => p.id), [uid, mode]);
 
   useEffect(() => {
     let unsubscribeAuth;
     let unsubscribeRoom;
     let mounted = true;
-
     const startRealtime = async (user) => {
       if (!mounted || !user) return;
       setUid(user.uid);
@@ -162,297 +175,190 @@ export default function GameScreen() {
       const playersRef = ref(realtimeDb, `rooms/${ROOM_ID}/players`);
       try {
         await onDisconnect(playerRef).remove();
-        await set(playerRef, {
-          x: 0, y: 0, z: 6, rotation: 0, health: 100, score: 0,
-          mode, weapon, joinedAt: Date.now(),
-        });
+        await set(playerRef, { x: 0, y: 0, z: 6, rotation: 0, health: 100, score: 0, mode, weapon, shield: false, zoneId: 'central', joinedAt: Date.now() });
         setConnectionStatus('EN LIGNE');
         unsubscribeRoom = onValue(playersRef, (snapshot) => {
           const data = snapshot.val() || {};
-          const others = Object.entries(data)
-            .filter(([id]) => id !== user.uid)
-            .map(([id, player]) => ({
-              id,
-              position: [player.x || 0, player.y || 0, player.z || 0],
-            }));
+          const others = Object.entries(data).filter(([id]) => id !== user.uid).map(([id, player]) => ({ id, position: [player.x || 0, player.y || 0, player.z || 0], mode: player.mode }));
           setRemotePlayers(others);
         }, () => setConnectionStatus('RÉSEAU INSTABLE'));
-      } catch {
-        setConnectionStatus('ERREUR FIREBASE');
-      }
+      } catch { setConnectionStatus('ERREUR FIREBASE'); }
     };
-
-    unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      if (user) startRealtime(user);
-      else signInAnonymously(auth).catch(() => setConnectionStatus('CONNEXION IMPOSSIBLE'));
-    });
-
-    return () => {
-      mounted = false;
-      unsubscribeAuth?.();
-      unsubscribeRoom?.();
-      if (auth.currentUser) {
-        remove(ref(realtimeDb, `rooms/${ROOM_ID}/players/${auth.currentUser.uid}`)).catch(() => {});
-      }
-    };
+    unsubscribeAuth = onAuthStateChanged(auth, (user) => user ? startRealtime(user) : signInAnonymously(auth).catch(() => setConnectionStatus('CONNEXION IMPOSSIBLE')));
+    return () => { mounted = false; unsubscribeAuth?.(); unsubscribeRoom?.(); if (auth.currentUser) remove(ref(realtimeDb, `rooms/${ROOM_ID}/players/${auth.currentUser.uid}`)).catch(() => {}); };
   }, []);
 
   useEffect(() => {
     if (!uid) return;
-    update(ref(realtimeDb, `rooms/${ROOM_ID}/players/${uid}`), {
-      x: position[0], y: position[1], z: position[2], health: hp, score,
-      mode, weapon, shield, updatedAt: Date.now(),
-    }).catch(() => setConnectionStatus('RÉSEAU INSTABLE'));
-  }, [position, hp, score, uid, mode, weapon, shield]);
+    update(ref(realtimeDb, `rooms/${ROOM_ID}/players/${uid}`), { x: position[0], y: position[1], z: position[2], health: hp, score, mode, weapon, shield, zoneId, updatedAt: Date.now() }).catch(() => setConnectionStatus('RÉSEAU INSTABLE'));
+  }, [position, hp, score, uid, mode, weapon, shield, zoneId]);
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setMatchTime((value) => (value > 0 ? value - 1 : MATCH_SECONDS));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+  useEffect(() => { const timer = setInterval(() => setMatchTime((v) => v > 0 ? v - 1 : MATCH_SECONDS), 1000); return () => clearInterval(timer); }, []);
+  useEffect(() => { const timer = setInterval(() => setEvent(getWorldEvent()), 30000); return () => clearInterval(timer); }, []);
+  useEffect(() => { if (!guild?.id) return; return subscribeGuild(guild.id, (value) => value && setGuild(value)); }, [guild?.id]);
 
   const move = (dx, dz) => {
-    const boost = mode === 'rush' ? 1.35 : 1;
-    setPosition(([x, y, z]) => [
-      Math.max(-15, Math.min(15, x + dx * boost)),
-      y,
-      Math.max(-15, Math.min(15, z + dz * boost)),
-    ]);
+    const boost = mode === 'ranked' ? 1.15 : 1;
+    setPosition(([x, y, z]) => { const [nx, nz] = clampWorldPosition(x + dx * boost, z + dz * boost, 28); return [nx, y, nz]; });
   };
 
   const shoot = () => {
-    if (ammo <= 0) {
-      setAmmo(currentWeapon.ammo);
-      return;
-    }
-    setAmmo((value) => value - 1);
-    setScore((value) => value + currentWeapon.damage);
+    if (ammo <= 0) { setAmmo(currentWeapon.ammo); setNotice('CHARGEUR RECHARGÉ'); return; }
+    setAmmo((v) => v - 1);
+    const target = robots.find((r) => !r.destroyed);
+    if (target) {
+      const remaining = target.hp - currentWeapon.damage;
+      if (remaining <= 0) {
+        setRobots((list) => list.map((r) => r.id === target.id ? { ...r, hp: 0, destroyed: true } : r));
+        const next = addXp(progress, target.reward);
+        setProgress({ ...next, robotsDestroyed: next.robotsDestroyed + 1, credits: next.credits + target.reward });
+        setScore((v) => v + target.reward);
+        setNotice(`${target.name} NEUTRALISÉ • +${target.reward} XP`);
+      } else setRobots((list) => list.map((r) => r.id === target.id ? { ...r, hp: remaining } : r));
+    } else { setScore((v) => v + currentWeapon.damage); setNotice('SECTEUR SÉCURISÉ'); }
   };
 
-  const dash = () => {
-    setPosition(([x, y, z]) => [Math.max(-15, Math.min(15, x)), y, Math.max(-15, Math.min(15, z - 2.8))]);
-    setScore((value) => value + 5);
+  const dash = () => { move(0, -3); setScore((v) => v + 5); setNotice('DASH TACTIQUE'); };
+  const toggleShield = () => { setShield((v) => !v); setNotice(shield ? 'BOUCLIER DÉSACTIVÉ' : 'BOUCLIER ACTIVÉ'); };
+  const selectWeapon = (id) => { setWeapon(id); const selected = WEAPONS.find((item) => item.id === id); setAmmo(selected?.ammo || 30); setPanel(null); };
+  const selectMode = (id) => { setMode(id); setPanel(null); setNotice(`${(GAME_MODES.find((m) => m.id === id) || GAME_MODES[0]).name} ACTIVÉ`); };
+  const switchZone = () => { const index = WORLD_ZONES.findIndex((z) => z.id === zoneId); const next = WORLD_ZONES[(index + 1) % WORLD_ZONES.length]; setZoneId(next.id); setPosition([0, 0, 6]); setNotice(`TRANSFERT → ${next.name}`); };
+  const startMission = (mission) => { const next = addXp(progress, mission.rewardXp); setProgress({ ...next, missionsCompleted: next.missionsCompleted + 1, credits: next.credits + mission.rewardXp * 2 }); setScore((v) => v + mission.rewardXp); setNotice(`${mission.title} TERMINÉE • +${mission.rewardXp} XP`); };
+  const createMyGuild = async () => {
+    if (!uid) return;
+    try { const created = await createGuild({ name: guildName || 'WINERLAND ELITE', tag: 'WNR', leaderId: uid, leaderName: 'Hunter' }); setGuild(created); setPanel(null); setNotice(`GUILDE ${created.tag} CRÉÉE`); } catch { setNotice('CRÉATION DE GUILDE REFUSÉE PAR LE RÉSEAU'); }
   };
-
-  const toggleShield = () => setShield((value) => !value);
-  const selectWeapon = (id) => {
-    setWeapon(id);
-    const selected = WEAPONS.find((item) => item.id === id);
-    setAmmo(selected?.ammo || 30);
-    setPanel(null);
-  };
-  const selectMode = (id) => {
-    setMode(id);
-    setPanel(null);
-  };
-
+  const matchPreview = findMatch({ modeId: mode, players: [...livePlayers, ...remotePlayers], maxPlayers: 10 });
   const formatTime = (seconds) => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 
   return (
     <View style={styles.container}>
-      <Canvas shadows camera={{ position: [0, 7.5, 16], fov: 55 }}>
-        <color attach="background" args={["#040b11"]} />
-        <fog attach="fog" args={["#040b11", 18, 42]} />
-        <ambientLight intensity={0.72} />
-        <hemisphereLight intensity={0.65} color="#d8ffff" groundColor="#09131b" />
-        <directionalLight position={[8, 15, 8]} intensity={2.2} castShadow shadow-mapSize-width={1024} shadow-mapSize-height={1024} />
-        <pointLight position={[0, 3, 0]} intensity={7} distance={15} color="#00e5c0" />
-        <Arena />
-        <Player position={position} shield={shield} />
-        {remotePlayers.map((player) => <Player key={player.id} position={player.position} remote />)}
+      <Canvas shadows dpr={[1, 2]} gl={{ antialias: HIGH_FIDELITY.renderer.antialias, powerPreference: 'high-performance' }} camera={{ position: [0, 8, 18], fov: 55 }}>
+        <color attach="background" args={[HIGH_FIDELITY.artDirection.palette[0]]} />
+        <fog attach="fog" args={[HIGH_FIDELITY.artDirection.palette[0], 20, 48]} />
+        <ambientLight intensity={0.55} />
+        <hemisphereLight intensity={0.75} color="#d8ffff" groundColor="#07131b" />
+        <directionalLight position={[10, 18, 10]} intensity={2.5} castShadow shadow-mapSize-width={HIGH_FIDELITY.renderer.shadowMap} shadow-mapSize-height={HIGH_FIDELITY.renderer.shadowMap} />
+        <pointLight position={[0, 4, 0]} intensity={8} distance={18} color="#00e5c0" />
+        <World robots={robots} position={position} remotePlayers={remotePlayers} shield={shield} />
         <CameraFollow position={position} />
       </Canvas>
 
       <View style={styles.hud} pointerEvents="box-none">
         <View style={styles.header}>
           <View>
-            <View style={styles.brandRow}>
-              <View style={styles.brandMark}><Text style={styles.brandMarkText}>W</Text></View>
-              <View>
-                <Text style={styles.title}>WINERLAND</Text>
-                <Text style={styles.subtitle}>NEXT-GEN ARENA • {currentMode.label}</Text>
-              </View>
-            </View>
-            <Text style={styles.connection}>● {connectionStatus}  •  {remotePlayers.length + 1} JOUEUR(S)</Text>
+            <View style={styles.brandRow}><View style={styles.brandMark}><Text style={styles.brandMarkText}>W</Text></View><View><Text style={styles.title}>WINERLAND</Text><Text style={styles.subtitle}>NEXT-GEN HUNTER • {currentMode.name}</Text></View></View>
+            <Text style={styles.connection}>● {connectionStatus}  •  {remotePlayers.length + 1} JOUEUR(S)  •  {currentZone.name}</Text>
           </View>
-
-          <View style={styles.topActions}>
-            <MiniMap position={position} remotePlayers={remotePlayers} />
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>MATCH</Text>
-              <Text style={styles.timer}>{formatTime(matchTime)}</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>SCORE</Text>
-              <Text style={styles.statValue}>{score}</Text>
-            </View>
-          </View>
+          <View style={styles.topActions}><MiniMap position={position} remotePlayers={remotePlayers} robots={robots} /><View style={styles.statCard}><Text style={styles.statLabel}>MATCH</Text><Text style={styles.timer}>{formatTime(matchTime)}</Text></View><View style={styles.statCard}><Text style={styles.statLabel}>LVL {progress.level}</Text><Text style={styles.statValue}>{score}</Text></View></View>
         </View>
 
+        <View style={styles.eventBar}><Text style={styles.eventLabel}>WORLD EVENT</Text><Text style={styles.eventValue}>{event.replaceAll('_', ' ')} • DANGER {currentZone.danger}/10</Text><Text style={styles.notice}>{notice}</Text></View>
+
         <View style={styles.modeRail}>
-          {MODES.map((item) => (
-            <TouchableOpacity key={item.id} style={[styles.modeButton, mode === item.id && styles.modeButtonActive]} onPress={() => selectMode(item.id)} activeOpacity={0.8}>
-              <Text style={styles.modeIcon}>{item.icon}</Text>
-              <View><Text style={styles.modeLabel}>{item.label}</Text><Text style={styles.modeSub}>{item.sub}</Text></View>
-            </TouchableOpacity>
-          ))}
+          {GAME_MODES.slice(0, 4).map((item) => <TouchableOpacity key={item.id} style={[styles.modeButton, mode === item.id && styles.modeButtonActive]} onPress={() => selectMode(item.id)}><Text style={styles.modeIcon}>{item.pvp ? '⚔' : '◆'}</Text><View><Text style={styles.modeLabel}>{item.name}</Text><Text style={styles.modeSub}>{item.teamSize} JOUEUR(S)</Text></View></TouchableOpacity>)}
           <TouchableOpacity style={styles.menuButton} onPress={() => setPanel(panel ? null : 'menu')}><Text style={styles.menuIcon}>☰</Text><Text style={styles.menuText}>MENU</Text></TouchableOpacity>
         </View>
 
         <View style={styles.bottomBar}>
-          <View style={styles.leftControls}>
-            <View style={styles.dpad}>
-              <TouchableOpacity style={styles.move} onPress={() => move(0, -0.75)}><Text style={styles.arrow}>▲</Text></TouchableOpacity>
-              <View style={styles.row}>
-                <TouchableOpacity style={styles.move} onPress={() => move(-0.75, 0)}><Text style={styles.arrow}>◀</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.move} onPress={() => move(0, 0.75)}><Text style={styles.arrow}>▼</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.move} onPress={() => move(0.75, 0)}><Text style={styles.arrow}>▶</Text></TouchableOpacity>
-              </View>
-            </View>
-            <TouchableOpacity style={styles.utilityButton} onPress={dash}>
-              <Text style={styles.utilityIcon}>⚡</Text><Text style={styles.utilityLabel}>DASH</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.utilityButton, shield && styles.utilityActive]} onPress={toggleShield}>
-              <Text style={styles.utilityIcon}>◇</Text><Text style={styles.utilityLabel}>SHIELD</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.weaponHud}>
-            <TouchableOpacity style={styles.weaponSelector} onPress={() => setPanel('weapons')}>
-              <Text style={styles.weaponIcon}>{currentWeapon.icon}</Text>
-              <View><Text style={styles.weaponName}>{currentWeapon.label}</Text><Text style={styles.weaponMeta}>DMG {currentWeapon.damage}</Text></View>
-            </TouchableOpacity>
-            <View style={styles.ammoBox}><Text style={styles.ammo}>{ammo}</Text><Text style={styles.ammoMax}>/{currentWeapon.ammo}</Text></View>
-            <TouchableOpacity style={styles.fireButton} onPress={shoot} activeOpacity={0.72}>
-              <View style={styles.fireInner}><Text style={styles.fireText}>FIRE</Text><Text style={styles.fireHint}>TAP</Text></View>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <View style={styles.healthPanel}>
-          <Text style={styles.hpText}>HP {hp}</Text>
-          <View style={styles.hpTrack}><View style={[styles.hpFill, { width: `${Math.max(0, hp)}%` }]} /></View>
-          <Text style={styles.level}>LV. 01</Text>
+          <View style={styles.leftControls}><View style={styles.dpad}><TouchableOpacity style={styles.move} onPress={() => move(0, -0.75)}><Text style={styles.arrow}>▲</Text></TouchableOpacity><View style={styles.row}><TouchableOpacity style={styles.move} onPress={() => move(-0.75, 0)}><Text style={styles.arrow}>◀</Text></TouchableOpacity><TouchableOpacity style={styles.move} onPress={() => move(0, 0.75)}><Text style={styles.arrow}>▼</Text></TouchableOpacity><TouchableOpacity style={styles.move} onPress={() => move(0.75, 0)}><Text style={styles.arrow}>▶</Text></TouchableOpacity></View></View><View style={styles.utilityRow}><TouchableOpacity style={styles.utilityButton} onPress={dash}><Text style={styles.utilityText}>DASH</Text></TouchableOpacity><TouchableOpacity style={[styles.utilityButton, shield && styles.utilityActive]} onPress={toggleShield}><Text style={styles.utilityText}>SHIELD</Text></TouchableOpacity></View></View>
+          <View style={styles.centerInfo}><Text style={styles.hpText}>HP {hp}</Text><View style={styles.hpTrack}><View style={[styles.hpFill, { width: `${hp}%` }]} /></View><Text style={styles.levelText}>LV {progress.level} • {progress.xp} XP • {progress.credits} CR</Text></View>
+          <View style={styles.rightControls}><View style={styles.weaponRow}>{WEAPONS.map((w) => <TouchableOpacity key={w.id} style={[styles.weaponButton, weapon === w.id && styles.weaponActive]} onPress={() => selectWeapon(w.id)}><Text style={styles.weaponIcon}>{w.icon}</Text><Text style={styles.weaponText}>{w.label}</Text></TouchableOpacity>)}</View><TouchableOpacity style={styles.fireButton} onPress={shoot} activeOpacity={0.78}><Text style={styles.fireText}>FIRE</Text><Text style={styles.ammo}>{ammo}</Text></TouchableOpacity></View>
         </View>
       </View>
 
-      {panel && (
-        <View style={styles.overlay}>
-          <View style={styles.panel}>
-            <View style={styles.panelHeader}>
-              <View><Text style={styles.panelEyebrow}>WINERLAND 2026</Text><Text style={styles.panelTitle}>{panel === 'weapons' ? 'ARSENAL' : 'CENTRE DE COMMANDE'}</Text></View>
-              <TouchableOpacity style={styles.close} onPress={() => setPanel(null)}><Text style={styles.closeText}>×</Text></TouchableOpacity>
-            </View>
-
-            {panel === 'weapons' ? (
-              <View style={styles.cardsRow}>
-                {WEAPONS.map((item) => (
-                  <TouchableOpacity key={item.id} style={[styles.weaponCard, weapon === item.id && styles.weaponCardActive]} onPress={() => selectWeapon(item.id)}>
-                    <Text style={styles.cardIcon}>{item.icon}</Text>
-                    <Text style={styles.cardTitle}>{item.label}</Text>
-                    <Text style={styles.cardMeta}>DÉGÂTS {item.damage} • MUNITIONS {item.ammo}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ) : (
-              <View style={styles.menuGrid}>
-                <TouchableOpacity style={styles.menuTile} onPress={() => setPanel('weapons')}><Text style={styles.tileIcon}>◈</Text><Text style={styles.tileTitle}>ARSENAL</Text><Text style={styles.tileSub}>Choisir ton équipement</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.menuTile} onPress={() => setPanel('modes')}><Text style={styles.tileIcon}>◎</Text><Text style={styles.tileTitle}>MODES</Text><Text style={styles.tileSub}>Changer le type de match</Text></TouchableOpacity>
-                <View style={styles.menuTile}><Text style={styles.tileIcon}>★</Text><Text style={styles.tileTitle}>MISSIONS</Text><Text style={styles.tileSub}>3 missions quotidiennes</Text></View>
-                <View style={styles.menuTile}><Text style={styles.tileIcon}>◫</Text><Text style={styles.tileTitle}>SAISON 01</Text><Text style={styles.tileSub}>Progression et récompenses</Text></View>
-              </View>
-            )}
-
-            {panel === 'modes' && (
-              <View style={styles.cardsRow}>
-                {MODES.map((item) => (
-                  <TouchableOpacity key={item.id} style={[styles.weaponCard, mode === item.id && styles.weaponCardActive]} onPress={() => selectMode(item.id)}>
-                    <Text style={styles.cardIcon}>{item.icon}</Text><Text style={styles.cardTitle}>{item.label}</Text><Text style={styles.cardMeta}>{item.sub}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-          </View>
-        </View>
-      )}
+      <Modal visible={!!panel} transparent animationType="fade" onRequestClose={() => setPanel(null)}>
+        <View style={styles.modalBackdrop}><View style={styles.modal}><Text style={styles.modalTitle}>WINERLAND COMMAND</Text><Text style={styles.modalSub}>HIGH-FIDELITY SYSTEMS • {currentZone.name}</Text><ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+          {panel === 'menu' && <>
+            <PanelButton title="🌍 MONDE OUVERT" sub={`${WORLD_ZONES.length} secteurs • événement ${event}`} onPress={() => setPanel('world')} />
+            <PanelButton title="🏰 GUILDE DE CHASSEURS" sub={guild ? `${guild.name} [${guild.tag}] • Niv. ${guild.level}` : 'Créer ton QG de chasse'} onPress={() => setPanel('guild')} />
+            <PanelButton title="🎯 MISSIONS & CONTRATS" sub={`${progress.missionsCompleted} terminée(s) • ${MISSIONS.length} contrats`} onPress={() => setPanel('missions')} />
+            <PanelButton title="🤖 CHASSE AUX ROBOTS" sub={`${robots.filter((r) => !r.destroyed).length} cible(s) actives`} onPress={() => setPanel('robots')} />
+            <PanelButton title="⚡ MATCHMAKING" sub={`${matchPreview.length} joueur(s) détecté(s) pour ${currentMode.name}`} onPress={() => setNotice(`MATCHMAKING ${currentMode.name} • ${matchPreview.length} JOUEUR(S)`)} />
+          </>}
+          {panel === 'world' && <><Text style={styles.sectionTitle}>SECTEURS</Text>{WORLD_ZONES.map((z) => <PanelButton key={z.id} title={z.name} sub={`${z.type.toUpperCase()} • danger ${z.danger}/10 • ${z.size}m`} active={zoneId === z.id} onPress={() => { setZoneId(z.id); setPanel(null); setNotice(`ZONE ${z.name} CHARGÉE`); }} />)}</>}
+          {panel === 'guild' && <><Text style={styles.sectionTitle}>GUILDE DE CHASSEURS</Text>{guild ? <><Text style={styles.modalText}>Guilde active : {guild.name} [{guild.tag}]</Text><Text style={styles.modalText}>Membres : {Object.keys(guild.members || {}).length} • Rating : {guild.stats?.rating || 1000}</Text><Text style={styles.modalText}>Territoires : {guild.stats?.territory || 0}</Text></> : <><Text style={styles.modalText}>Aucune guilde active. Ton compte peut créer le QG.</Text><TouchableOpacity style={styles.primaryButton} onPress={createMyGuild}><Text style={styles.primaryText}>CRÉER WINERLAND ELITE [WNR]</Text></TouchableOpacity></>}</>}
+          {panel === 'missions' && <><Text style={styles.sectionTitle}>CONTRATS</Text>{MISSIONS.map((m) => <PanelButton key={m.id} title={m.title} sub={`${m.type.toUpperCase()} • objectif ${m.target} • récompense ${m.rewardXp} XP`} onPress={() => startMission(m)} />)}</>}
+          {panel === 'robots' && <><Text style={styles.sectionTitle}>CIBLES IA</Text>{ROBOT_ARCHETYPES.map((r) => <PanelButton key={r.id} title={r.name} sub={`HP ${r.hp} • vitesse ${r.speed} • récompense ${r.reward} CR`} onPress={() => { const id = Date.now(); setRobots((list) => [...list, { ...r, id, archetype: r.id, position: [(Math.random() * 16) - 8, 0.8, (Math.random() * 16) - 8], destroyed: false }]); setPanel(null); setNotice(`${r.name} DÉPLOYÉ`); }} />)}</>}
+        </ScrollView><TouchableOpacity style={styles.closeButton} onPress={() => setPanel(null)}><Text style={styles.closeText}>FERMER</Text></TouchableOpacity></View></View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#03080c' },
-  hud: { ...StyleSheet.absoluteFillObject, justifyContent: 'space-between', padding: 16 },
+  container: { flex: 1, backgroundColor: '#05070d' },
+  hud: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'space-between', padding: 16 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   brandRow: { flexDirection: 'row', alignItems: 'center' },
-  brandMark: { width: 42, height: 42, borderRadius: 12, backgroundColor: '#00d9b5', alignItems: 'center', justifyContent: 'center', marginRight: 10, shadowOpacity: 0.35, shadowRadius: 12 },
-  brandMarkText: { color: '#031018', fontSize: 25, fontWeight: '900' },
-  title: { color: '#f6ffff', fontSize: 25, fontWeight: '900', letterSpacing: 4 },
-  subtitle: { color: '#6e8b98', fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginTop: 2 },
-  connection: { color: '#72a09e', fontSize: 9, fontWeight: '800', marginTop: 7, letterSpacing: 0.7 },
+  brandMark: { width: 42, height: 42, borderRadius: 12, borderWidth: 1, borderColor: '#00e5c0', backgroundColor: '#06181b', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+  brandMarkText: { color: '#00e5c0', fontSize: 25, fontWeight: '900' },
+  title: { color: '#fff', fontSize: 22, fontWeight: '900', letterSpacing: 3 },
+  subtitle: { color: '#00e5c0', fontSize: 9, fontWeight: '800', letterSpacing: 1.4, marginTop: 2 },
+  connection: { color: '#7ea3aa', fontSize: 9, marginTop: 8, fontWeight: '700' },
   topActions: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  statCard: { minWidth: 78, height: 58, borderRadius: 14, backgroundColor: 'rgba(5,16,24,0.88)', borderWidth: 1, borderColor: 'rgba(90,150,160,0.25)', paddingHorizontal: 12, paddingVertical: 7, alignItems: 'flex-end' },
-  statLabel: { color: '#5e7b86', fontSize: 8, fontWeight: '900', letterSpacing: 1.2 },
-  statValue: { color: '#f7ffff', fontSize: 19, fontWeight: '900', marginTop: 3 },
-  timer: { color: '#00e5c0', fontSize: 18, fontWeight: '900', marginTop: 3 },
-  map: { width: 132, padding: 7, borderRadius: 14, backgroundColor: 'rgba(5,16,24,0.9)', borderWidth: 1, borderColor: 'rgba(0,229,192,0.28)' },
-  mapTitle: { color: '#5e7b86', fontSize: 7, fontWeight: '900', letterSpacing: 1, marginBottom: 4 },
-  mapField: { width: 116, height: 78, backgroundColor: 'rgba(10,31,39,0.95)', borderRadius: 9, overflow: 'hidden', position: 'relative', borderWidth: 1, borderColor: 'rgba(100,180,180,0.15)' },
-  mapGrid: { position: 'absolute', backgroundColor: 'rgba(120,200,200,0.1)' },
-  playerDot: { position: 'absolute', width: 10, height: 10, borderRadius: 5, backgroundColor: '#00e5c0', borderWidth: 2, borderColor: '#d9ffff' },
-  enemyDot: { position: 'absolute', width: 8, height: 8, borderRadius: 4, backgroundColor: '#ff7b46' },
+  map: { backgroundColor: 'rgba(4,12,17,.88)', borderWidth: 1, borderColor: '#1d4f55', padding: 6, borderRadius: 10 },
+  mapTitle: { color: '#6b969e', fontSize: 7, fontWeight: '800', marginBottom: 4 },
+  mapField: { width: 118, height: 118, backgroundColor: '#081a21', borderWidth: 1, borderColor: '#163b42', overflow: 'hidden' },
+  mapGrid: { position: 'absolute', backgroundColor: '#164049' },
+  playerDot: { position: 'absolute', width: 10, height: 10, borderRadius: 5, backgroundColor: '#00e5c0' },
+  enemyDot: { position: 'absolute', width: 8, height: 8, borderRadius: 4, backgroundColor: '#ff7a2f' },
+  robotDot: { position: 'absolute', width: 6, height: 6, borderRadius: 3, backgroundColor: '#7c5cff' },
+  statCard: { minWidth: 72, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, backgroundColor: 'rgba(4,12,17,.88)', borderWidth: 1, borderColor: '#1d4f55' },
+  statLabel: { color: '#6b969e', fontSize: 8, fontWeight: '800' },
+  statValue: { color: '#fff', fontSize: 18, fontWeight: '900', marginTop: 2 },
+  timer: { color: '#00e5c0', fontSize: 18, fontWeight: '900', marginTop: 2 },
+  eventBar: { alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 7, paddingHorizontal: 14, borderRadius: 20, backgroundColor: 'rgba(5,15,21,.9)', borderWidth: 1, borderColor: '#1d4f55' },
+  eventLabel: { color: '#ff7a2f', fontSize: 8, fontWeight: '900' },
+  eventValue: { color: '#c8e6e7', fontSize: 9, fontWeight: '800' },
+  notice: { color: '#00e5c0', fontSize: 8, fontWeight: '800' },
   modeRail: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  modeButton: { flex: 1, minHeight: 54, maxWidth: 190, borderRadius: 15, backgroundColor: 'rgba(5,16,24,0.78)', borderWidth: 1, borderColor: 'rgba(90,150,160,0.22)', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12 },
-  modeButtonActive: { borderColor: '#00d9b5', backgroundColor: 'rgba(0,80,75,0.38)' },
-  modeIcon: { color: '#00e5c0', fontSize: 19, marginRight: 9 },
-  modeLabel: { color: '#f3ffff', fontSize: 11, fontWeight: '900', letterSpacing: 1 },
-  modeSub: { color: '#66808a', fontSize: 8, marginTop: 2, fontWeight: '700' },
-  menuButton: { width: 76, height: 54, borderRadius: 15, backgroundColor: 'rgba(5,16,24,0.9)', borderWidth: 1, borderColor: 'rgba(90,150,160,0.22)', alignItems: 'center', justifyContent: 'center' },
-  menuIcon: { color: '#d7ffff', fontSize: 17 },
-  menuText: { color: '#6e8b98', fontSize: 7, fontWeight: '900', marginTop: 2, letterSpacing: 1 },
-  bottomBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
-  leftControls: { flexDirection: 'row', alignItems: 'flex-end' },
-  dpad: { alignItems: 'center', marginRight: 8 },
+  modeButton: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 9, backgroundColor: 'rgba(7,18,25,.88)', borderWidth: 1, borderColor: '#183a42' },
+  modeButtonActive: { borderColor: '#00e5c0', backgroundColor: 'rgba(0,80,70,.35)' },
+  modeIcon: { color: '#00e5c0', fontSize: 15, marginRight: 7 },
+  modeLabel: { color: '#fff', fontSize: 9, fontWeight: '900' },
+  modeSub: { color: '#6b969e', fontSize: 7, marginTop: 1 },
+  menuButton: { marginLeft: 'auto', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 9, backgroundColor: 'rgba(7,18,25,.92)', borderWidth: 1, borderColor: '#7c5cff' },
+  menuIcon: { color: '#fff', textAlign: 'center', fontSize: 15 },
+  menuText: { color: '#fff', fontSize: 7, fontWeight: '900', marginTop: 2 },
+  bottomBar: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
+  leftControls: { alignItems: 'center' },
+  dpad: { alignItems: 'center' },
   row: { flexDirection: 'row', alignItems: 'center' },
-  move: { width: 48, height: 40, margin: 2, borderRadius: 12, backgroundColor: 'rgba(5,18,27,0.86)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(0,217,181,0.3)' },
-  arrow: { color: '#dffefe', fontSize: 16, fontWeight: '900' },
-  utilityButton: { width: 65, height: 65, marginHorizontal: 4, borderRadius: 16, backgroundColor: 'rgba(5,16,24,0.88)', borderWidth: 1, borderColor: 'rgba(90,150,160,0.22)', alignItems: 'center', justifyContent: 'center' },
-  utilityActive: { borderColor: '#00e5c0', backgroundColor: 'rgba(0,95,80,0.38)' },
-  utilityIcon: { color: '#00e5c0', fontSize: 20 },
-  utilityLabel: { color: '#718b94', fontSize: 7, fontWeight: '900', marginTop: 3 },
-  weaponHud: { flexDirection: 'row', alignItems: 'center' },
-  weaponSelector: { height: 65, minWidth: 125, borderRadius: 16, backgroundColor: 'rgba(5,16,24,0.9)', borderWidth: 1, borderColor: 'rgba(90,150,160,0.24)', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 11 },
-  weaponIcon: { color: '#00e5c0', fontSize: 23, marginRight: 8 },
-  weaponName: { color: '#f5ffff', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
-  weaponMeta: { color: '#65818a', fontSize: 7, fontWeight: '800', marginTop: 3 },
-  ammoBox: { height: 65, minWidth: 66, justifyContent: 'center', alignItems: 'center' },
-  ammo: { color: '#f6ffff', fontSize: 24, fontWeight: '900' },
-  ammoMax: { color: '#65818a', fontSize: 9, fontWeight: '800' },
-  fireButton: { width: 92, height: 92, borderRadius: 46, backgroundColor: '#ff4f4f', justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: 'rgba(255,255,255,0.85)', shadowOpacity: 0.28, shadowRadius: 10 },
-  fireInner: { width: 74, height: 74, borderRadius: 37, borderWidth: 1, borderColor: 'rgba(255,255,255,0.38)', justifyContent: 'center', alignItems: 'center' },
-  fireText: { color: '#fff', fontSize: 17, fontWeight: '900', letterSpacing: 1 },
-  fireHint: { color: 'rgba(255,255,255,0.7)', fontSize: 7, fontWeight: '900', marginTop: 2 },
-  healthPanel: { position: 'absolute', left: 16, bottom: 16, flexDirection: 'row', alignItems: 'center' },
-  hpText: { color: '#dffffb', fontSize: 10, fontWeight: '900', width: 42 },
-  hpTrack: { width: 150, height: 7, borderRadius: 4, backgroundColor: 'rgba(4,16,23,0.9)', overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(80,150,150,0.22)' },
-  hpFill: { height: '100%', backgroundColor: '#00e5c0', borderRadius: 4 },
-  level: { color: '#5f7b84', fontSize: 8, fontWeight: '900', marginLeft: 8 },
-  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(1,7,11,0.76)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  panel: { width: '82%', minHeight: 210, borderRadius: 22, backgroundColor: '#07131c', borderWidth: 1, borderColor: 'rgba(0,229,192,0.32)', padding: 20 },
-  panelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 },
-  panelEyebrow: { color: '#00e5c0', fontSize: 8, fontWeight: '900', letterSpacing: 1.5 },
-  panelTitle: { color: '#f5ffff', fontSize: 25, fontWeight: '900', marginTop: 3 },
-  close: { width: 38, height: 38, borderRadius: 12, backgroundColor: '#10212b', alignItems: 'center', justifyContent: 'center' },
-  closeText: { color: '#d8ffff', fontSize: 26, fontWeight: '300', lineHeight: 29 },
-  cardsRow: { flexDirection: 'row', gap: 12 },
-  weaponCard: { flex: 1, minHeight: 125, borderRadius: 17, backgroundColor: '#0c1c25', borderWidth: 1, borderColor: 'rgba(100,170,180,0.2)', padding: 15, justifyContent: 'center' },
-  weaponCardActive: { borderColor: '#00e5c0', backgroundColor: 'rgba(0,93,80,0.34)' },
-  cardIcon: { color: '#00e5c0', fontSize: 28, marginBottom: 10 },
-  cardTitle: { color: '#f5ffff', fontSize: 14, fontWeight: '900', letterSpacing: 1 },
-  cardMeta: { color: '#6a8790', fontSize: 8, fontWeight: '800', marginTop: 6 },
-  menuGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  menuTile: { width: '48%', minHeight: 95, borderRadius: 16, backgroundColor: '#0c1c25', borderWidth: 1, borderColor: 'rgba(100,170,180,0.18)', padding: 13 },
-  tileIcon: { color: '#00e5c0', fontSize: 21 },
-  tileTitle: { color: '#efffff', fontSize: 11, fontWeight: '900', marginTop: 5 },
-  tileSub: { color: '#65818a', fontSize: 8, marginTop: 3 },
+  move: { width: 40, height: 34, margin: 2, borderRadius: 8, backgroundColor: 'rgba(5,17,23,.9)', borderWidth: 1, borderColor: '#1e4b53', justifyContent: 'center', alignItems: 'center' },
+  arrow: { color: '#d7ffff', fontSize: 13, fontWeight: '900' },
+  utilityRow: { flexDirection: 'row', gap: 7, marginTop: 6 },
+  utilityButton: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, backgroundColor: 'rgba(5,17,23,.9)', borderWidth: 1, borderColor: '#1e4b53' },
+  utilityActive: { borderColor: '#00e5c0' },
+  utilityText: { color: '#9bc7cb', fontSize: 8, fontWeight: '900' },
+  centerInfo: { width: 220, alignItems: 'center', marginBottom: 5 },
+  hpText: { color: '#fff', fontSize: 10, fontWeight: '900', alignSelf: 'stretch' },
+  hpTrack: { height: 7, alignSelf: 'stretch', backgroundColor: '#182a30', borderRadius: 5, overflow: 'hidden', marginVertical: 4 },
+  hpFill: { height: '100%', backgroundColor: '#00e5c0' },
+  levelText: { color: '#82a8ae', fontSize: 8, fontWeight: '800' },
+  rightControls: { alignItems: 'flex-end' },
+  weaponRow: { flexDirection: 'row', gap: 5, marginBottom: 6 },
+  weaponButton: { minWidth: 55, paddingVertical: 6, paddingHorizontal: 7, alignItems: 'center', borderRadius: 8, backgroundColor: 'rgba(5,17,23,.9)', borderWidth: 1, borderColor: '#1e4b53' },
+  weaponActive: { borderColor: '#00e5c0' },
+  weaponIcon: { color: '#00e5c0', fontSize: 12 },
+  weaponText: { color: '#a8cdd0', fontSize: 7, fontWeight: '900', marginTop: 2 },
+  fireButton: { width: 86, height: 86, borderRadius: 43, backgroundColor: '#d93456', borderWidth: 2, borderColor: '#ff98ab', justifyContent: 'center', alignItems: 'center', shadowColor: '#ff3355', shadowOpacity: 0.7, shadowRadius: 10 },
+  fireText: { color: '#fff', fontSize: 15, fontWeight: '900' },
+  ammo: { color: '#ffd8df', fontSize: 9, fontWeight: '900', marginTop: 3 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,.78)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  modal: { width: '86%', maxWidth: 620, maxHeight: '86%', borderRadius: 16, padding: 18, backgroundColor: '#07131b', borderWidth: 1, borderColor: '#00e5c0' },
+  modalTitle: { color: '#00e5c0', fontSize: 19, fontWeight: '900', letterSpacing: 1.5 },
+  modalSub: { color: '#688d94', fontSize: 8, fontWeight: '800', marginTop: 3, marginBottom: 12 },
+  scroll: { maxHeight: 420 },
+  scrollContent: { paddingBottom: 6 },
+  sectionTitle: { color: '#ff7a2f', fontSize: 10, fontWeight: '900', marginBottom: 8 },
+  panelButton: { padding: 12, marginBottom: 7, borderRadius: 10, backgroundColor: '#0b2028', borderWidth: 1, borderColor: '#19424a' },
+  panelButtonActive: { borderColor: '#00e5c0', backgroundColor: '#0d3434' },
+  panelButtonTitle: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  panelButtonSub: { color: '#79a4aa', fontSize: 8, marginTop: 4, fontWeight: '700' },
+  modalText: { color: '#c6dcdf', fontSize: 11, lineHeight: 18, marginBottom: 8 },
+  primaryButton: { padding: 13, borderRadius: 9, backgroundColor: '#00e5c0', alignItems: 'center', marginTop: 8 },
+  primaryText: { color: '#031013', fontSize: 10, fontWeight: '900' },
+  closeButton: { marginTop: 10, alignSelf: 'flex-end', paddingVertical: 9, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1, borderColor: '#ff7a2f' },
+  closeText: { color: '#ff7a2f', fontSize: 9, fontWeight: '900' },
 });
