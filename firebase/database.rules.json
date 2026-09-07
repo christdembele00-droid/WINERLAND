@@ -5,7 +5,8 @@
         "players": {
           "$uid": {
             ".read": "auth != null",
-            ".write": "auth != null && auth.uid === $uid"
+            ".write": "auth != null && auth.uid === $uid",
+            ".validate": "newData.hasChildren(['x', 'y', 'z', 'health', 'score', 'mode', 'weapon', 'shield', 'zoneId'])"
           }
         }
       }
@@ -16,7 +17,7 @@
         ".write": "auth != null && ((!data.exists() && newData.child('leaderId').val() === auth.uid) || (data.exists() && data.child('leaderId').val() === auth.uid))",
         "members": {
           "$uid": {
-            ".write": "auth != null && ((data.exists() && data.child('role').val() === 'leader' && root.child('guilds').child($guildId).child('leaderId').val() === auth.uid) || (!data.exists() && root.child('guilds').child($guildId).child('leaderId').val() === auth.uid))"
+            ".write": "auth != null && ((data.exists() && root.child('guilds').child($guildId).child('leaderId').val() === auth.uid) || (!data.exists() && auth.uid === $uid && newData.child('role').val() === 'member') || (data.exists() && root.child('guilds').child($guildId).child('leaderId').val() === auth.uid))"
           }
         }
       }
@@ -24,7 +25,8 @@
     "guildWars": {
       "$warId": {
         ".read": "auth != null",
-        ".write": "auth != null"
+        ".write": "auth != null && ((!data.exists() && (root.child('guilds').child(newData.child('guildA').val()).child('members').child(auth.uid).exists() || root.child('guilds').child(newData.child('guildB').val()).child('members').child(auth.uid).exists())) || (data.exists() && (root.child('guilds').child(data.child('guildA').val()).child('members').child(auth.uid).exists() || root.child('guilds').child(data.child('guildB').val()).child('members').child(auth.uid).exists())))",
+        ".validate": "newData.hasChildren(['id', 'guildA', 'guildB', 'mode', 'status', 'scoreA', 'scoreB', 'createdAt', 'endsAt']) && newData.child('guildA').val() !== newData.child('guildB').val()"
       }
     }
   }
