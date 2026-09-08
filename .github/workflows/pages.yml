@@ -33,7 +33,7 @@ jobs:
         run: npm install --no-audit --no-fund
 
       - name: Export Expo Web
-        run: npx expo export --platform web --base-url /WINERLAND
+        run: npx expo export --platform web
 
       - name: Verify Expo Web output
         run: |
