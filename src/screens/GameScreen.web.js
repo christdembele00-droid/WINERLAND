@@ -6,6 +6,7 @@ import { onDisconnect, onValue, ref, remove, set, update } from 'firebase/databa
 import { auth, realtimeDb } from '../firebase';
 import { WORLD_ZONES, getWorldEvent, clampWorldPosition } from '../game/worldSystem';
 import { GAME_MODES, ROBOT_ARCHETYPES } from '../game/hunterSystems';
+import ModernWorld from '../game/ModernWorld.web';
 
 const ROOM_ID = 'quickmatch';
 
@@ -163,9 +164,9 @@ export default function GameScreenWeb() {
 
   return (
     <div style={styles.app}>
-      <Canvas shadows camera={{ position: [0, 8.5, 18], fov: 55 }} style={styles.canvas}>
+      <Canvas shadows dpr={[1, 1.5]} gl={{ antialias: false, powerPreference: 'high-performance' }} camera={{ position: [0, 8.5, 18], fov: 55 }} style={styles.canvas}>
         <Camera position={position} />
-        <World position={position} remotePlayers={remotePlayers} robots={robots} />
+        <ModernWorld position={position} remotePlayers={remotePlayers} robots={robots} />
       </Canvas>
       <div style={styles.topbar}>
         <div><div style={styles.logo}>WINERLAND</div><div style={styles.tag}>OPEN WORLD • HUNTER NETWORK</div></div>
