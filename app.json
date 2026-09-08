@@ -6,9 +6,18 @@
     "orientation": "landscape",
     "userInterfaceStyle": "dark",
     "scheme": "winerland",
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#000000"
+        }
+      ]
+    ],
     "android": {
       "package": "com.winerland.game",
-      "versionCode": 2
+      "versionCode": 2,
+      "backgroundColor": "#000000"
     },
     "ios": {
       "bundleIdentifier": "com.winerland.game"
