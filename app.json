@@ -6,6 +6,13 @@
     "orientation": "landscape",
     "userInterfaceStyle": "dark",
     "scheme": "winerland",
+    "web": {
+      "output": "single",
+      "bundler": "metro"
+    },
+    "experiments": {
+      "baseUrl": "/WINERLAND"
+    },
     "plugins": [
       [
         "expo-splash-screen",
