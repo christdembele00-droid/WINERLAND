@@ -1,0 +1,45 @@
+name: Integrate WINERLAND robot AI
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: "!contains(github.event.head_commit.message, '[ai-integrated]')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Integrate robot AI
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/screens/GameScreen.web.js')
+          s = p.read_text(encoding='utf-8')
+          marker = "import { GAME_MODES, ROBOT_ARCHETYPES } from '../game/hunterSystems';"
+          if "robotAISystem.web" not in s:
+              s = s.replace(marker, marker + "\nimport { updateRobotAI } from '../game/robotAISystem.web';", 1)
+          if 'updateRobotAI(current, position)' not in s:
+              anchor = "const resetBattle = () => {"
+              ai = "useEffect(() => {\n    const timer = setInterval(() => {\n      setRobots((current) => {\n        const result = updateRobotAI(current, position);\n        if (result.playerDamage) setHp((value) => Math.max(0, value - result.playerDamage));\n        return result.robots;\n      });\n    }, 50);\n    return () => clearInterval(timer);\n  }, [position]);\n\n  "
+              if anchor not in s: raise SystemExit('AI anchor not found')
+              s = s.replace(anchor, ai + anchor, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit integration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/screens/GameScreen.web.js
+          git commit -m 'feat: integrate robot pursuit AI [ai-integrated]' || exit 0
+          git push
+      - name: Remove one-time workflow
+        if: success()
+        run: |
+          rm -f .github/workflows/integrate-ai.yml
+          git add .github/workflows/integrate-ai.yml
+          git commit -m 'chore: remove one-time AI integration workflow [ai-integrated]' || exit 0
+          git push
