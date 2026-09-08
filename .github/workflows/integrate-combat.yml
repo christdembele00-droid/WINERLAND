@@ -1,0 +1,49 @@
+name: Integrate WINERLAND combat system
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: "!contains(github.event.head_commit.message, '[combat-integrated]')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Integrate combat into web game
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/screens/GameScreen.web.js')
+          s = p.read_text(encoding='utf-8')
+          marker = "import { GAME_MODES, ROBOT_ARCHETYPES } from '../game/hunterSystems';"
+          imp = marker + "\nimport { COMBAT_CONFIG, createCombatState, canShoot } from '../game/combatSystem.web';"
+          if "combatSystem.web" not in s:
+              s = s.replace(marker, imp, 1)
+          s = s.replace("const shoot = () => {", "const shoot = () => {\n    const now = performance.now();\n    if (!combatStateRef.current) combatStateRef.current = createCombatState();\n    if (!canShoot(combatStateRef.current, now)) return;\n    combatStateRef.current.lastShotAt = now;\n    combatStateRef.current.ammo = Math.max(0, ammo - 1);", 1)
+          s = s.replace("setAmmo((v) => v - 1);", "setAmmo((v) => Math.max(0, v - 1));", 1)
+          anchor = "const [robots, setRobots] = useState(() =>"
+          if "combatStateRef" not in s:
+              idx = s.find(anchor)
+              if idx >= 0:
+                  s = s[:idx] + "const combatStateRef = useRef(createCombatState());\n  " + s[idx:]
+          s = s.replace("const target = robots.find((r) => !r.destroyed);", "const target = robots.find((r) => !r.destroyed);", 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/screens/GameScreen.web.js
+          git commit -m 'feat: integrate combat cooldown and raycast foundation [combat-integrated]' || exit 0
+          git push
+      - name: Remove one-time workflow
+        if: success()
+        run: |
+          rm -f .github/workflows/integrate-combat.yml
+          git add .github/workflows/integrate-combat.yml
+          git commit -m 'chore: remove one-time combat integration workflow [combat-integrated]' || exit 0
+          git push
