@@ -6,6 +6,7 @@ import { onDisconnect, onValue, ref, remove, set, update } from 'firebase/databa
 import { auth, realtimeDb } from '../firebase';
 import { WORLD_ZONES, getWorldEvent, clampWorldPosition } from '../game/worldSystem';
 import { GAME_MODES, ROBOT_ARCHETYPES } from '../game/hunterSystems';
+import { COMBAT_CONFIG, createCombatState, canShoot } from '../game/combatSystem.web';
 import ModernWorld from '../game/ModernWorld.web';
 
 const ROOM_ID = 'quickmatch';
@@ -62,6 +63,7 @@ export default function GameScreenWeb() {
   const [zoneId, setZoneId] = useState('central');
   const [event, setEvent] = useState(getWorldEvent());
   const [notice, setNotice] = useState('NEXUS CITY INITIALISÉE');
+  const combatStateRef = useRef(createCombatState());
   const [robots, setRobots] = useState(() => ROBOT_ARCHETYPES.slice(0, 6).map((a, i) => ({
     ...a,
     id: i + 1,
